@@ -1,0 +1,80 @@
+name: Spark CI CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Validate Python Code
+        run: python -m compileall -q app.py test_app.py
+
+      - name: Run Unit and Pipeline Tests
+        run: pytest -v
+
+  package:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package Application
+        run: zip -r spark-app.zip app.py requirements.txt
+
+      - name: Upload Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: spark-application
+          path: spark-app.zip
+
+  deploy:
+    needs: package
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Package
+        uses: actions/download-artifact@v4
+        with:
+          name: spark-application
+
+      - name: Deploy Spark Application
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          scp spark-app.zip \
+            "$SSH_USER@$SSH_HOST:/tmp/spark-app.zip"
+          ssh "$SSH_USER@$SSH_HOST" \
+            "mkdir -p ~/spark-app &&
+             unzip -o /tmp/spark-app.zip -d ~/spark-app"
